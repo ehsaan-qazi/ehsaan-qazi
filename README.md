@@ -3,6 +3,8 @@
 
 - 🔭 I’m currently working on [UniGo — A Transport Finder](https://ehsaan-qazi.github.io/UniGo-A-Transport-Finder/)
 
+![Image of UniGo](pic.png)
+
 - 🌱 I’m currently learning **OOPS in Java**
 
 - 📫 How to reach me **ehsaanbusinesshandle@gmail.com**
