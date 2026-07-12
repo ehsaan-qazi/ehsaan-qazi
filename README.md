@@ -1,6 +1,6 @@
 <h1 align="center">Hi 👋, I'm Ehsaan Qazi</h1>
 <h3 align="center">Future Software Engineer</h3>
-<h2 align="center>Outdated profile info, will be updated soon</h2>
+<h2 align="center">Outdated profile info, will be updated soon</h2>
 - 🔭 I’m currently working on [UniGo — A Transport Finder](https://ehsaan-qazi.github.io/UniGo-A-Transport-Finder/)
 
 ![Image of UniGo](pic.png)
