@@ -12,7 +12,7 @@ import hashlib
 # Issues and pull requests permissions not needed at the moment, but may be used in the future
 HEADERS = {'authorization': 'token '+ os.environ['ACCESS_TOKEN']}
 USER_NAME = os.environ['USER_NAME'] # 'Andrew6rant'
-QUERY_COUNT = {'user_getter': 0, 'follower_getter': 0, 'graph_repos_stars': 0, 'recursive_loc': 0, 'graph_commits': 0, 'loc_query': 0}
+QUERY_COUNT = {'user_getter': 0, 'follower_getter': 0, 'graph_repos_stars': 0, 'recursive_loc': 0, 'graph_commits': 0, 'loc_query': 0, 'streak_getter': 0, 'languages_getter': 0, 'recent_commits_getter': 0}
 
 
 def daily_readme(birthday):
@@ -317,9 +317,74 @@ def stars_counter(data):
     return total_stars
 
 
-def svg_overwrite(filename, age_data, commit_data, star_data, repo_data, contrib_data, follower_data, loc_data):
+def update_languages_svg(root, lang_data):
     """
-    Parse SVG files and update elements with my age, commits, stars, repositories, and lines written
+    Updates #lang_line_0 and #lang_line_1 elements in SVG with official GitHub colors
+    """
+    line0_elem = root.find(".//*[@id='lang_line_0']")
+    line1_elem = root.find(".//*[@id='lang_line_1']")
+    
+    if line0_elem is not None:
+        del line0_elem[:]
+        for i, (name, pct, color) in enumerate(lang_data[:2]):
+            dot_span = etree.Element("tspan", fill=color)
+            dot_span.text = "●"
+            line0_elem.append(dot_span)
+            
+            txt_span = etree.Element("tspan")
+            txt_span.text = f" {name} {pct:.1f}%" + ("   " if i < 1 else "")
+            line0_elem.append(txt_span)
+
+    if line1_elem is not None:
+        del line1_elem[:]
+        name_abbrevs = {"JavaScript": "JS", "TypeScript": "TS", "Jupyter Notebook": "Jupyter"}
+        for i, (name, pct, color) in enumerate(lang_data[2:5]):
+            display_name = name_abbrevs.get(name, name)
+            dot_span = etree.Element("tspan", fill=color)
+            dot_span.text = "●"
+            line1_elem.append(dot_span)
+            
+            txt_span = etree.Element("tspan")
+            txt_span.text = f" {display_name} {pct:.1f}%" + ("   " if i < len(lang_data[2:5]) - 1 else "")
+            line1_elem.append(txt_span)
+
+
+def update_recent_commits_svg(root, commits_data):
+    """
+    Updates commit_0, commit_1, commit_2 with compact prefix and exact 30-char smart truncation
+    """
+    for i in range(3):
+        if i < len(commits_data):
+            c = commits_data[i]
+            repo_tag = f"[{c['repo']}]"
+            sha_str = c['sha']
+            msg = c['message'].strip()
+            
+            # Standardize repo prefix column to 19 characters
+            dots_len = max(2, 17 - len(repo_tag))
+            dot_str = " " + ("." * (dots_len - 2)) + " "
+            
+            # Truncate message cleanly so total line is exactly <= 59 characters
+            max_msg_len = 30
+            if len(msg) > max_msg_len:
+                msg_str = msg[:max_msg_len - 3] + "..."
+            else:
+                msg_str = msg
+            
+            find_and_replace(root, f"commit_{i}_repo", repo_tag)
+            find_and_replace(root, f"commit_{i}_dots", dot_str)
+            find_and_replace(root, f"commit_{i}_sha", sha_str)
+            find_and_replace(root, f"commit_{i}_msg", msg_str)
+        else:
+            find_and_replace(root, f"commit_{i}_repo", "")
+            find_and_replace(root, f"commit_{i}_dots", "")
+            find_and_replace(root, f"commit_{i}_sha", "")
+            find_and_replace(root, f"commit_{i}_msg", "")
+
+
+def svg_overwrite(filename, age_data, commit_data, star_data, repo_data, contrib_data, follower_data, loc_data, streak_data, lang_data, recent_commits):
+    """
+    Parse SVG files and update elements with age, commits, stars, repositories, lines written, streak, languages, and recent commits
     """
     tree = etree.parse(filename)
     root = tree.getroot()
@@ -332,6 +397,14 @@ def svg_overwrite(filename, age_data, commit_data, star_data, repo_data, contrib
     justify_format(root, 'loc_data', loc_data[2], 9)
     justify_format(root, 'loc_add', loc_data[0])
     justify_format(root, 'loc_del', loc_data[1], 7)
+    
+    current_streak, longest_streak = streak_data
+    justify_format(root, 'streak_current', f"{current_streak} day{format_plural(current_streak)}", 16)
+    justify_format(root, 'streak_longest', f"{longest_streak} day{format_plural(longest_streak)}", 9)
+    
+    update_languages_svg(root, lang_data)
+    update_recent_commits_svg(root, recent_commits)
+    
     tree.write(filename, encoding='utf-8', xml_declaration=True)
 
 
@@ -409,6 +482,156 @@ def follower_getter(username):
     return int(request.json()['data']['user']['followers']['totalCount'])
 
 
+def streak_getter(username):
+    """
+    Calculates current streak and longest streak from GitHub contribution calendar
+    """
+    query_count('streak_getter')
+    query = '''
+    query ($login: String!) {
+        user(login: $login) {
+            contributionsCollection {
+                contributionCalendar {
+                    weeks {
+                        contributionDays {
+                            contributionCount
+                            date
+                        }
+                    }
+                }
+            }
+        }
+    }'''
+    request = simple_request(streak_getter.__name__, query, {'login': username})
+    data = request.json()
+    days = []
+    for week in data['data']['user']['contributionsCollection']['contributionCalendar']['weeks']:
+        for day in week['contributionDays']:
+            days.append((day['date'], day['contributionCount']))
+            
+    longest_streak = 0
+    temp_streak = 0
+    for date_str, count in days:
+        if count > 0:
+            temp_streak += 1
+            longest_streak = max(longest_streak, temp_streak)
+        else:
+            temp_streak = 0
+
+    current_streak = 0
+    reversed_days = list(reversed(days))
+    start_idx = 0
+    if reversed_days and reversed_days[0][1] == 0:
+        start_idx = 1 # grace for today if today has 0 commits so far
+
+    for i in range(start_idx, len(reversed_days)):
+        if reversed_days[i][1] > 0:
+            current_streak += 1
+        else:
+            break
+            
+    return current_streak, longest_streak
+
+
+def languages_getter(username):
+    """
+    Queries language distribution across owned repositories and official GitHub language colors
+    """
+    query_count('languages_getter')
+    query = '''
+    query ($login: String!) {
+        user(login: $login) {
+            repositories(first: 60, ownerAffiliations: [OWNER], isFork: false) {
+                edges {
+                    node {
+                        languages(first: 10, orderBy: {field: SIZE, direction: DESC}) {
+                            edges {
+                                size
+                                node {
+                                    name
+                                    color
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }'''
+    request = simple_request(languages_getter.__name__, query, {'login': username})
+    lang_data = request.json()
+    lang_sizes = {}
+    lang_colors = {}
+    for repo_edge in lang_data['data']['user']['repositories']['edges']:
+        for lang_edge in repo_edge['node']['languages']['edges']:
+            name = lang_edge['node']['name']
+            color = lang_edge['node']['color'] or '#858585'
+            size = lang_edge['size']
+            lang_sizes[name] = lang_sizes.get(name, 0) + size
+            lang_colors[name] = color
+
+    total_bytes = sum(lang_sizes.values())
+    if total_bytes == 0:
+        return []
+    sorted_langs = sorted(lang_sizes.items(), key=lambda x: x[1], reverse=True)
+    result = []
+    for name, size in sorted_langs[:5]:
+        pct = (size / total_bytes) * 100
+        result.append((name, pct, lang_colors[name]))
+    return result
+
+
+def recent_commits_getter(username, author_id):
+    """
+    Fetches the 3 most recent commits across repositories
+    """
+    query_count('recent_commits_getter')
+    query = '''
+    query ($login: String!, $author_id: ID!) {
+        user(login: $login) {
+            repositories(first: 15, orderBy: {field: PUSHED_AT, direction: DESC}, ownerAffiliations: [OWNER, COLLABORATOR]) {
+                edges {
+                    node {
+                        name
+                        defaultBranchRef {
+                            target {
+                                ... on Commit {
+                                    history(first: 5, author: { id: $author_id }) {
+                                        edges {
+                                            node {
+                                                oid
+                                                messageHeadline
+                                                committedDate
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }'''
+    request = simple_request(recent_commits_getter.__name__, query, {'login': username, 'author_id': author_id['id']})
+    comm_data = request.json()
+    all_commits = []
+    for repo in comm_data['data']['user']['repositories']['edges']:
+        repo_name = repo['node']['name']
+        if repo['node']['defaultBranchRef']:
+            for c in repo['node']['defaultBranchRef']['target']['history']['edges']:
+                node = c['node']
+                all_commits.append({
+                    'repo': repo_name,
+                    'sha': node['oid'][:7],
+                    'message': node['messageHeadline'],
+                    'date': node['committedDate']
+                })
+
+    all_commits.sort(key=lambda x: x['date'], reverse=True)
+    return all_commits[:3]
+
+
 def query_count(funct_id):
     """
     Counts how many times the GitHub GraphQL API is called
@@ -458,6 +681,9 @@ if __name__ == '__main__':
     repo_data, repo_time = perf_counter(graph_repos_stars, 'repos', ['OWNER'])
     contrib_data, contrib_time = perf_counter(graph_repos_stars, 'repos', ['OWNER', 'COLLABORATOR', 'ORGANIZATION_MEMBER'])
     follower_data, follower_time = perf_counter(follower_getter, USER_NAME)
+    streak_data, streak_time = perf_counter(streak_getter, USER_NAME)
+    lang_data, lang_time = perf_counter(languages_getter, USER_NAME)
+    recent_commits, commits_time = perf_counter(recent_commits_getter, USER_NAME, OWNER_ID)
 
     # several repositories that I've contributed to have since been deleted.
     if OWNER_ID == {'id': 'MDQ6VXNlcjU3MzMxMTM0'}: # only calculate for user Andrew6rant
@@ -469,10 +695,10 @@ if __name__ == '__main__':
 
     for index in range(len(total_loc)-1): total_loc[index] = '{:,}'.format(total_loc[index]) # format added, deleted, and total LOC
 
-    svg_overwrite('dark_mode.svg', age_data, commit_data, star_data, repo_data, contrib_data, follower_data, total_loc[:-1])
-    svg_overwrite('light_mode.svg', age_data, commit_data, star_data, repo_data, contrib_data, follower_data, total_loc[:-1])
+    svg_overwrite('dark_mode.svg', age_data, commit_data, star_data, repo_data, contrib_data, follower_data, total_loc[:-1], streak_data, lang_data, recent_commits)
+    svg_overwrite('light_mode.svg', age_data, commit_data, star_data, repo_data, contrib_data, follower_data, total_loc[:-1], streak_data, lang_data, recent_commits)
 
     print(f"\nSuccessfully updated 'dark_mode.svg' and 'light_mode.svg'!")
-    print(f"Total function time: {'%.4f' % (user_time + age_time + loc_time + commit_time + star_time + repo_time + contrib_time)} s")
+    print(f"Total function time: {'%.4f' % (user_time + age_time + loc_time + commit_time + star_time + repo_time + contrib_time + streak_time + lang_time + commits_time)} s")
     print('Total GitHub GraphQL API calls:', '{:>3}'.format(sum(QUERY_COUNT.values())))
     for funct_name, count in QUERY_COUNT.items(): print('{:<28}'.format('   ' + funct_name + ':'), '{:>6}'.format(count))
